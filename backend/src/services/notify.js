@@ -1,1 +1,1 @@
-// placeholder for services/notify.js
+export async function sendEmail(){return true;} export async function sendSMS(){return true;}
