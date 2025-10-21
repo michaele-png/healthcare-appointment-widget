@@ -16,16 +16,26 @@ dotenv.config();
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean) }));
+app.use(cors({
+  origin: (process.env.ALLOWED_ORIGINS || '*')  // allow all if unset
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+}));
 app.use(compression());
 app.use(express.json());
 
+// health check
+app.get('/', (_req, res) => res.send('Vemipo widget backend up'));
+
+// Mount feature routes
 app.use('/api/auth', authRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/availability', availabilityRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/webhooks', webhookRoutes);
 
+// Errors
 app.use(notFound);
 app.use(errorHandler);
 
