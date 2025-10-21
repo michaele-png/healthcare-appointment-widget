@@ -1,0 +1,9 @@
+# pick ONE base (sandbox for testing OR production for real PMS)
+# NEXHEALTH_API_BASE=https://api.nexhealth.com/v20240412
+
+NEXHEALTH_API_BASE=https://api.sandbox.nexhealth.com/v20240412
+
+NEXHEALTH_ENABLED=true
+NEXHEALTH_API_KEY=dXNlci03NDEtc2FuZGJveA.jk34sXdcOlJKiHdhCWskbqLUTorAKfP6
+NEXHEALTH_SUBDOMAIN= caprium-demo-practice # from Institutions
+PORT=4000
