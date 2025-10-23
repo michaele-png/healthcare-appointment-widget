@@ -1,97 +1,102 @@
-import express from 'express';
-import db from '../config/database.js';
-import { authenticate } from '../middleware/auth.js';
-import { createAppointmentSchema } from '../utils/joiSchemas.js';
-import { nhCreateAppointment, nhCancelAppointment } from '../services/nexhealth.js';
-import { auditLog } from '../services/audit.js';
-import { addMinutes } from '../utils/time.js';
+import { Router } from 'express';
+import { nh, SUBDOMAIN } from '../lib/nexhealth.js';
 
-const router = express.Router();
+const router = Router();
 
-router.post('/', authenticate, async (req, res, next) => {
-  const conn = await db.getConnection();
+/**
+ * POST /api/appointments
+ * Body (example):
+ * {
+ *   "provider_id": "prov_123",
+ *   "location_id": "loc_001",
+ *   "visit_type_id": "vt_10",
+ *   "start_time": "2025-10-25T09:00:00-04:00",
+ *   "patient": {
+ *     "first_name":"Alex","last_name":"Patient","email":"a@b.com","phone":"+1-555-0100","dob":"1995-05-20"
+ *   },
+ *   "notes": "Web widget"
+ * }
+ */
+router.post('/', /* remove authenticate for public widget */ async (req, res) => {
   try {
-    const { error, value } = createAppointmentSchema.validate(req.body);
-    if (error) return res.status(400).json({ error: error.message });
+    // lightweight guard (keep it simple for MVP)
+    const { provider_id, location_id, visit_type_id, start_time, patient } = req.body || {};
+    if (!provider_id || !location_id || !visit_type_id || !start_time || !patient?.first_name || !patient?.last_name)
+      return res.status(400).json({ error: 'Missing required fields' });
 
-    const { provider_id, appointment_type_id, start_time, patient, reason, insurance_info } = value;
+    // Prevent double-booking on retries
+    const idem = `${patient.email || patient.phone || 'anon'}-${start_time}`;
 
-    await conn.beginTransaction();
+    const payload = {
+      subdomain: SUBDOMAIN,
+      provider_id,
+      location_id,
+      appointment_type_id: visit_type_id, // some NH accounts name this appointment_type_id
+      visit_type_id,                       // include both to be safe if your API expects visit_type_id
+      start_time,
+      // optional: duration_minutes if your flow uses custom duration
+      patient: {
+        first_name: patient.first_name,
+        last_name: patient.last_name,
+        email: patient.email,
+        phone: patient.phone,
+        dob: patient.dob || patient.date_of_birth || undefined
+      },
+      notes: req.body.notes || undefined,
+      metadata: { source: 'vemipo-widget' }
+    };
 
-    let duration = 30;
-    try {
-      const [[type]] = await conn.query('SELECT duration_minutes FROM appointment_types WHERE id = ? AND active = 1', [appointment_type_id]);
-      if (type) duration = type.duration_minutes;
-    } catch {}
-    const end_time = addMinutes(start_time, duration);
+    const { data } = await nh.post('/appointments', payload, {
+      headers: { 'Idempotency-Key': idem }
+    });
 
-    const [existing] = await conn.query('SELECT id, nexhealth_patient_id FROM patients WHERE email = ? LIMIT 1', [patient.email]);
-    let patient_id;
-    if (existing.length) {
-      patient_id = existing[0].id;
-      await conn.query('UPDATE patients SET first_name=?, last_name=?, phone=?, date_of_birth=?, address=?, insurance_info=? WHERE id=?', [
-        patient.first_name, patient.last_name, patient.phone, patient.date_of_birth,
-        JSON.stringify(patient.address || null), JSON.stringify(insurance_info || null), patient_id
-      ]);
-    } else {
-      await conn.query(
-        'INSERT INTO patients (id, first_name, last_name, date_of_birth, email, phone, address, insurance_info) VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?)',
-        [patient.first_name, patient.last_name, patient.date_of_birth, patient.email, patient.phone, JSON.stringify(patient.address || null), JSON.stringify(insurance_info || null)]
-      );
-      const [[row]] = await conn.query('SELECT id FROM patients WHERE email = ? LIMIT 1', [patient.email]);
-      patient_id = row.id;
-    }
-
-    const appointment_id = (await conn.query('SELECT UUID() AS id'))[0][0].id;
-    await conn.query(
-      'INSERT INTO appointments (id, provider_id, patient_id, appointment_type_id, start_time, end_time, status, reason, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [appointment_id, provider_id, patient_id, appointment_type_id, start_time, end_time, 'scheduled', reason || null, JSON.stringify({ source: 'widget' })]
-    );
-
-    await conn.commit();
-    conn.release();
-
-    try {
-      const nh = await nhCreateAppointment({
-        provider_id,
-        patient_id: existing[0]?.nexhealth_patient_id || undefined,
-        appointment_type_id,
-        start_time,
-        duration_minutes: duration,
-        notes: reason || undefined
-      });
-      if (nh?.id) await db.query('UPDATE appointments SET nexhealth_appointment_id = ? WHERE id = ?', [nh.id, appointment_id]);
-    } catch {}
-
-    const io = req.app.get('io');
-    io.emit('appointment-created', { appointment_id, provider_id, start_time });
-
-    await auditLog({ userId: req.user?.userId, action: 'appointment.created', entityType: 'appointment', entityId: appointment_id, oldData: null, newData: { provider_id, start_time }, ip: req.ip, ua: req.headers['user-agent'] });
-
-    res.status(201).json({ appointment_id, confirmation_number: `APT-${appointment_id}`, status: 'scheduled', start_time });
+    // return the NexHealth appointment as-is (ids are NH ids)
+    res.status(201).json(data);
   } catch (e) {
-    try { await conn.rollback(); } catch {}
-    try { conn.release(); } catch {}
-    next(e);
+    const status = e?.response?.status || 500;
+    const err = e?.response?.data || { error: 'create appointment failed' };
+    res.status(status).json(err);
   }
 });
 
-router.post('/:id/cancel', authenticate, async (req, res, next) => {
+/**
+ * (Optional) GET /api/appointments?start=&end=&locationId=
+ * Use for an internal calendar view or verification
+ */
+router.get('/', async (req, res) => {
+  try {
+    const { start, end, locationId } = req.query;
+    if (!start || !end || !locationId)
+      return res.status(400).json({ error: 'start, end, and locationId are required' });
+
+    const { data } = await nh.get('/appointments', {
+      params: { subdomain: SUBDOMAIN, location_id: locationId, start, end }
+    });
+    res.json(data);
+  } catch (e) {
+    res.status(e?.response?.status || 500).json(e?.response?.data || { error: 'list appointments failed' });
+  }
+});
+
+/**
+ * (Optional) POST /api/appointments/:id/cancel
+ * Here :id is the **NexHealth appointment id** (e.g. appt_abc123)
+ * Keep this protected if it’s staff-only.
+ */
+router.post('/:id/cancel', /* authenticate, */ async (req, res) => {
   try {
     const { id } = req.params;
-    const [[appt]] = await db.query('SELECT id, nexhealth_appointment_id FROM appointments WHERE id = ?', [id]);
-    if (!appt) return res.status(404).json({ error: 'Not found' });
 
-    await db.query('UPDATE appointments SET status = "cancelled" WHERE id = ?', [id]);
-    if (appt.nexhealth_appointment_id) {
-      try { await nhCancelAppointment(appt.nexhealth_appointment_id); } catch {}
-    }
+    // Depending on NH API: some use DELETE, others a PATCH 'status: canceled'
+    // Try DELETE first; if your account expects a different verb, swap accordingly.
+    await nh.delete(`/appointments/${id}`, {
+      params: { subdomain: SUBDOMAIN }
+    });
 
-    const io = req.app.get('io');
-    io.emit('appointment-cancelled', { appointment_id: id });
-
-    res.json({ appointment_id: id, status: 'cancelled' });
-  } catch (e) { next(e); }
+    res.json({ appointment_id: id, status: 'canceled' });
+  } catch (e) {
+    res.status(e?.response?.status || 500).json(e?.response?.data || { error: 'cancel failed' });
+  }
 });
 
 export default router;
