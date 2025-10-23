@@ -1,40 +1,68 @@
-import express from 'express';
-import db from '../config/database.js';
-import { authenticate } from '../middleware/auth.js';
-import { nhGetProviders } from '../services/nexhealth.js';
+import { Router } from 'express';
+import { nh, SUBDOMAIN } from '../lib/nexhealth.js'; // <-- uses your env vars
 
-const router = express.Router();
+const router = Router();
 
-router.get('/', authenticate, async (req, res, next) => {
+/**
+ * GET /api/providers?locationId=LOC_ID
+ * Returns providers directly from NexHealth (source of truth)
+ */
+router.get('/', async (req, res) => {
   try {
-    const { practice_id, specialty } = req.query;
-    const params = [];
-    let sql = 'SELECT p.id, CONCAT(p.first_name, " ", p.last_name) as name, p.specialty, p.bio, p.photo_url, p.accepting_new_patients FROM providers p WHERE p.active = 1';
-    if (practice_id) { sql += ' AND p.practice_id = ?'; params.push(practice_id); }
-    if (specialty) { sql += ' AND p.specialty = ?'; params.push(specialty); }
-    const [rows] = await db.query(sql, params);
+    const { locationId } = req.query;
+    const { data } = await nh.get('/providers', {
+      params: { subdomain: SUBDOMAIN, location_id: locationId }
+    });
 
-    let nextAvailByProvider = {};
-    try {
-      const nhProviders = await nhGetProviders();
-      nextAvailByProvider = (nhProviders || []).reduce((acc, item) => {
-        acc[item.id] = item.next_available || null;
-        return acc;
-      }, {});
-    } catch {}
-
-    const providers = rows.map(r => ({
-      id: r.id,
-      name: r.name,
-      specialty: r.specialty,
-      bio: r.bio,
-      photo_url: r.photo_url,
-      accepting_new_patients: !!r.accepting_new_patients,
-      next_available: nextAvailByProvider[r.id] || null
+    // normalize to what your widget expects
+    const providers = (data || []).map(p => ({
+      id: p.id, // IMPORTANT: keep NH id end-to-end
+      name: p.name || `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim(),
+      specialty: p.specialty || null,
+      photo_url: p.photo_url || null,
+      accepting_new_patients: p.accepting_new_patients ?? true,
+      next_available: p.next_available || null,
+      address_line: p.address_line || p.location?.address_line || null,
+      location_id: p.location_id || p.location?.id || null,
     }));
 
+    res.json({ providers });
+  } catch (e) {
+    res.status(e?.response?.status || 500).json(e?.response?.data || { error: 'providers failed' });
+  }
+});
+
+/**
+ * GET /api/providers/locations
+ * Directory helper for widget filter
+ */
+router.get('/locations', async (_req, res) => {
+  try {
+    const { data } = await nh.get('/locations', { params: { subdomain: SUBDOMAIN } });
+    res.json(data);
+  } catch (e) {
+    res.status(e?.response?.status || 500).json(e?.response?.data || { error: 'locations failed' });
+  }
+});
+
+/**
+ * GET /api/providers/visit-types?providerId=PROV_ID
+ * List visit types; providerId optional
+ */
+router.get('/visit-types', async (req, res) => {
+  try {
+    const { providerId } = req.query;
+    const { data } = await nh.get('/appointment_types', {
+      params: { subdomain: SUBDOMAIN, provider_id: providerId }
+    });
+    res.json(data);
+  } catch (e) {
+    res.status(e?.response?.status || 500).json(e?.response?.data || { error: 'visit types failed' });
+  }
+});
+
+export default router;
     res.json({ providers });
   } catch (e) { next(e); }
 });
 
-export default router;
