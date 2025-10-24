@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { nh, SUBDOMAIN } from '../lib/nexhealth.js'; // <-- uses your env vars
+import { nh, SUBDOMAIN } from '../lib/nexhealth.js';
 
 const router = Router();
 
@@ -14,9 +14,9 @@ router.get('/', async (req, res) => {
       params: { subdomain: SUBDOMAIN, location_id: locationId }
     });
 
-    // normalize to what your widget expects
+    // Normalize to widget shape
     const providers = (data || []).map(p => ({
-      id: p.id, // IMPORTANT: keep NH id end-to-end
+      id: p.id, // NexHealth provider id
       name: p.name || `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim(),
       specialty: p.specialty || null,
       photo_url: p.photo_url || null,
@@ -62,7 +62,3 @@ router.get('/visit-types', async (req, res) => {
 });
 
 export default router;
-    res.json({ providers });
-  } catch (e) { next(e); }
-});
-
