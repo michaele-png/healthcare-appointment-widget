@@ -1,25 +1,36 @@
-import express from 'express';
-import db from '../config/database.js';
-import { authenticate } from '../middleware/auth.js';
-import { nhGetAvailability } from '../services/nexhealth.js';
+import { Router } from 'express';
+import { nh, SUBDOMAIN } from '../lib/nexhealth.js';
 
-const router = express.Router();
+const router = Router();
 
-router.get('/', authenticate, async (req, res, next) => {
+/**
+ * GET /api/availability/:providerId/slots?date=YYYY-MM-DD&locationId=LOC_ID&typeId=VT_ID
+ */
+router.get('/:providerId/slots', async (req, res) => {
   try {
-    const { provider_id, date, type_id } = req.query;
-    if (!provider_id || !date) return res.status(400).json({ error: 'provider_id and date required' });
-
-    let slots = [];
-    try {
-      const nhSlots = await nhGetAvailability({ provider_id, date, appointment_type_id: type_id });
-      slots = (nhSlots || []).map(s => ({ start_time: s.start_time, end_time: s.end_time, available: s.available !== false }));
-    } catch {
-      slots = [];
+    const { providerId } = req.params;
+    const { date, locationId, typeId } = req.query;
+    if (!providerId || !date || !locationId || !typeId) {
+      return res.status(400).json({ error: 'providerId, date, locationId, typeId required' });
     }
 
-    res.json({ date, slots });
-  } catch (e) { next(e); }
+    const { data } = await nh.get('/appointment_slots', {
+      params: {
+        subdomain: SUBDOMAIN,
+        provider_id: providerId,
+        location_id: locationId,
+        // include both keys for compatibility, NH may accept one:
+        visit_type_id: typeId,
+        appointment_type_id: typeId,
+        date,
+      },
+    });
+
+    res.json(data);
+  } catch (e) {
+    res.status(e?.response?.status || 500)
+       .json(e?.response?.data || { error: 'Failed to fetch slots' });
+  }
 });
 
 export default router;
