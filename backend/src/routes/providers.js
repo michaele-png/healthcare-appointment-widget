@@ -41,10 +41,12 @@ router.get('/locations', async (_req, res) => {
     const { data } = await nh.get('/locations', { params: { subdomain: SUBDOMAIN } });
     res.json(data);
   } catch (e) {
-    res.status(e?.response?.status || 500).json(e?.response?.data || { error: 'locations failed' });
+    const status = e?.response?.status || 500;
+    const body   = e?.response?.data || { error: e.message };
+    console.error('NH /locations error:', status, body);
+    res.status(status).json(body); // <-- show what NH actually sent
   }
 });
-
 /**
  * GET /api/providers/visit-types?providerId=PROV_ID
  * List visit types; providerId optional
