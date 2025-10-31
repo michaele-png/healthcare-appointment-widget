@@ -4,83 +4,115 @@ import { nh, SUBDOMAIN, NH_ENABLED } from "../lib/nexhealth.js";
 const router = Router();
 
 /**
- * Query params:
- *   providerId / provider_id
- *   locationId / location_id
- *   from / start   (YYYY-MM-DD)
- *   to   / end     (YYYY-MM-DD)
+ * GET /api/availability
+ * Accepts both naming styles and both date key names.
+ * Query:
+ *   - providerId | provider_id   (optional for some NH accounts)
+ *   - locationId | location_id   (required)
+ *   - from | start               (YYYY-MM-DD, inclusive)
+ *   - to   | end                 (YYYY-MM-DD, exclusive)
  */
 router.get("/", async (req, res) => {
   try {
-    const providerId =
-      req.query.providerId || req.query.provider_id;
-    const locationId =
-      req.query.locationId || req.query.location_id;
+    const providerId = req.query.providerId || req.query.provider_id || null;
+    const locationId = req.query.locationId || req.query.location_id;
     const from = req.query.from || req.query.start;
     const to = req.query.to || req.query.end;
 
-    if (!providerId || !locationId || !from || !to) {
+    if (!locationId || !from || !to) {
       return res.status(400).json({
         code: false,
-        error: ["Missing providerId, locationId, from, or to"],
+        error: ["Missing locationId, from/start, or to/end"],
       });
     }
 
     // --------------------------------------------
-    // DEMO / LOCAL MODE — when NexHealth disabled
+    // DEMO/OFF mode (only when NH explicitly disabled)
     // --------------------------------------------
     if (String(NH_ENABLED).toLowerCase() === "false") {
-      const today = new Date(from);
+      const first = new Date(`${from}T00:00:00.000Z`);
       const out = [];
-
       for (let i = 0; i < 7; i++) {
-        const d1 = new Date(today);
-        d1.setDate(d1.getDate() + i);
-        d1.setHours(10, 0, 0, 0);
-
-        const d2 = new Date(today);
-        d2.setDate(d2.getDate() + i);
-        d2.setHours(14, 0, 0, 0);
-
+        const d1 = new Date(first); d1.setUTCDate(d1.getUTCDate() + i); d1.setUTCHours(15, 0, 0, 0);
+        const d2 = new Date(first); d2.setUTCDate(d2.getUTCDate() + i); d2.setUTCHours(20, 0, 0, 0);
         out.push({ start: d1.toISOString() }, { start: d2.toISOString() });
       }
-
-      //  wrap in code/data so frontend parses correctly
       return res.json({ code: true, data: out });
     }
 
     // --------------------------------------------
     // NEXHEALTH MODE
-    // --------------------------------------------
-    let data;
-    try {
-      const r = await nh.get("/available_times", {
-        params: {
-          subdomain: SUBDOMAIN,
-          provider_id: providerId,
-          location_id: locationId,
-          start_date: from,
-          end_date: to,
-        },
-      });
-      data = r.data;
-    } catch (e1) {
-      const status = e1?.response?.status;
-      if (status !== 404) throw e1;
 
-      const r2 = await nh.get("/availability", {
-        params: {
-          subdomain: SUBDOMAIN,
-          provider_id: providerId,
-          location_id: locationId,
-          start_date: from,
-          end_date: to,
-        },
-      });
-      data = r2.data;
+    const baseParams = {
+      subdomain: SUBDOMAIN,
+      location_id: locationId,
+      start_date: from,
+      end_date: to,
+    };
+
+    const withProvider = providerId
+      ? { ...baseParams, provider_id: providerId }
+      : baseParams;
+
+    const tryNH = async (path, params) => {
+      const { data } = await nh.get(path, { params });
+      return data;
+    };
+
+    let data = null;
+    let tried = [];
+
+    const attempts = [];
+
+    if (providerId) {
+      attempts.push({ path: "/available_times", params: withProvider });
+      attempts.push({ path: "/availability", params: withProvider });
+    } else {
+      attempts.push({ path: "/available_times", params: baseParams });
+      attempts.push({ path: "/availability", params: baseParams });
     }
 
-    // Normalize payload shape
+    let lastErrStatus = null;
+
+    for (const a of attempts) {
+      try {
+        tried.push(a);
+        data = await tryNH(a.path, a.params);
+        break; // success
+      } catch (e) {
+        const status = e?.response?.status;
+        lastErrStatus = status;
+        // If not 404, bubble it up (auth/network/etc.)
+        if (status !== 404) throw e;
+        // else continue loop and try next variant
+      }
+    }
+
+    if (!data && providerId) {
+      // Retry without provider filter (location-only)
+      const locationOnlyAttempts = [
+        { path: "/available_times", params: baseParams },
+        { path: "/availability", params: baseParams },
+      ];
+      for (const a of locationOnlyAttempts) {
+        try {
+          tried.push(a);
+          data = await tryNH(a.path, a.params);
+          break;
+        } catch (e) {
+          const status = e?.response?.status;
+          lastErrStatus = status;
+          if (status !== 404) throw e;
+        }
+      }
+    }
+
+    // If still nothing and last error was 404, treat as "no slots"
+    if (!data && lastErrStatus === 404) {
+      return res.json({ code: true, data: [] });
+    }
+
+    // Normalize various NH shapes → [{ start, end? }, ...]
     const rows = Array.isArray(data?.data)
       ? data.data
       : Array.isArray(data?.available_times)
@@ -91,7 +123,7 @@ router.get("/", async (req, res) => {
 
     const slots = rows
       .map((s) => ({
-        start: s.start ?? s.start_time ?? s.slotStart ?? s.begin ?? s.time,
+        start: s.start ?? s.start_time ?? s.begin ?? s.time ?? s.slotStart,
         end: s.end ?? s.end_time ?? s.slotEnd ?? undefined,
       }))
       .filter((s) => !!s.start);
