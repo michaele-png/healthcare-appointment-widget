@@ -4,51 +4,44 @@ import { api, VisitType } from '../api/api';
 
 export default function AppointmentTypeStep() {
   const {
-    selectedProviderId,
-    selectedVisitTypeId,
-    setSelectedVisitTypeId,
-    goNext,
+    bookingData,
+    setCurrentStep,
+    updateBookingData,
     goBack,
+    goNext,
   } = useWidget();
 
+  const providerId = String(bookingData.provider?.id ?? '');
   const [types, setTypes] = useState<VisitType[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!selectedProviderId) return;
-    api.visitTypes(selectedProviderId)
+    if (!providerId) return;
+    api.visitTypes(providerId)
       .then(setTypes)
       .catch(e => setErr(e.message));
-  }, [selectedProviderId]);
+  }, [providerId]);
+
+  const onSelect = (t: VisitType) => {
+    updateBookingData({ appointmentType: { id: t.id, name: t.name, duration: t.duration } });
+    setCurrentStep('datetime-selection');
+  };
 
   return (
     <div className="step">
       <h3 className="text-lg font-semibold mb-3">Appointment Type</h3>
-
       {err && <div className="error">{err}</div>}
-
-      <select
-        className="w-full border rounded p-2"
-        value={selectedVisitTypeId ?? ''}
-        onChange={e => setSelectedVisitTypeId(e.target.value)}
-      >
-        <option value="">Select a visit type</option>
-        {types.map(v => (
-          <option key={v.id} value={v.id}>
-            {v.name} · {v.duration ?? '--'}m
-          </option>
+      <div className="grid gap-2">
+        {types.map(t => (
+          <button key={String(t.id)} className="btn" onClick={() => onSelect(t)}>
+            {t.name} · {t.duration ?? '--'}m
+          </button>
         ))}
-      </select>
-
+        {types.length === 0 && !err && <div className="text-sm text-gray-600">No visit types available.</div>}
+      </div>
       <div className="actions flex gap-2 mt-3">
         <button className="btn" onClick={goBack}>Back</button>
-        <button
-          className="btn-primary"
-          disabled={!selectedVisitTypeId}
-          onClick={goNext}
-        >
-          Next
-        </button>
+        <button className="btn" disabled>Next</button>
       </div>
     </div>
   );
