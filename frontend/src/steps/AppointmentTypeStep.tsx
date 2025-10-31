@@ -3,24 +3,19 @@ import { useWidget } from '../context/WidgetContext';
 import { api, VisitType } from '../api/api';
 
 export default function AppointmentTypeStep() {
-  const {
-    bookingData,
-    setCurrentStep,
-    updateBookingData,
-    goBack,
-    goNext,
-  } = useWidget();
-
+  const { bookingData, setCurrentStep, updateBookingData, goBack } = useWidget();
   const providerId = String(bookingData.provider?.id ?? '');
+  const locationId = String(bookingData.locationId ?? bookingData.provider?.location_id ?? '');
+
   const [types, setTypes] = useState<VisitType[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!providerId) return;
-    api.visitTypes(providerId)
+    if (!providerId || !locationId) return;
+    api.visitTypes(providerId, locationId)
       .then(setTypes)
       .catch(e => setErr(e.message));
-  }, [providerId]);
+  }, [providerId, locationId]);
 
   const onSelect = (t: VisitType) => {
     updateBookingData({ appointmentType: { id: t.id, name: t.name, duration: t.duration } });
