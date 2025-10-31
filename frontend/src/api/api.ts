@@ -1,6 +1,19 @@
-const BASE =
-  import.meta.env.VITE_BACKEND_URL ??
+export const BASE =
+  import.meta.env.VITE_BACKEND_URL ||
   "https://healthcare-appointment-widget-production.up.railway.app";
+
+
+function qs(params: Record<string, string | number | boolean | undefined>) {
+  const u = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null) continue;
+    u.set(k, String(v));
+    if (k === "locationId") u.set("location_id", String(v));
+    if (k === "location_id") u.set("locationId", String(v));
+  }
+  const s = u.toString();
+  return s ? `?${s}` : "";
+}
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -10,72 +23,63 @@ async function j<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// ---- Types (exported so steps can import) ----
+// ---- Types ----
 export type Location = { id: string | number; name: string };
 export type Provider = { id: string | number; name: string };
 export type VisitType = { id: string | number; name: string; duration?: number };
 export type Slot = { start: string; end?: string };
 
+// ---- API ----
 export const api = {
-  locations: () =>
-    fetch(`${BASE}/api/providers/locations`)
-      .then(j<any>)
-      .then((r) => {
-        // Accept NexHealth-shaped payload or already-normalized array
-        if (Array.isArray(r)) return r as Location[];
-        const inst = r?.data?.[0];
-        const locs = inst?.locations ?? [];
-        return locs.map((l: any) => ({ id: String(l.id), name: l.name })) as Location[];
-      }),
+  // NOTE: If /api/providers/locations is not implemented on your backend, you can remove this.
+  locations: async (): Promise<Location[]> => {
+    const r: any = await fetch(`${BASE}/api/providers/locations`).then(j<any>);
+    if (Array.isArray(r)) return r as Location[];
+    const inst = r?.data?.[0];
+    const locs = inst?.locations ?? [];
+    return locs.map((l: any) => ({ id: String(l.id), name: l.name })) as Location[];
+  },
 
-  providers: (locationId: string | number) =>
-    fetch(`${BASE}/api/providers?locationId=${encodeURIComponent(String(locationId))}`)
-      .then(j<any>)
-      .then((r) => {
-        const rows = Array.isArray(r?.data) ? r.data : r;
-        return rows.map((p: any) => ({
-          id: String(p.id ?? p.provider_id ?? p.uuid ?? p.name),
-          name: p.name ?? p.display_name ?? "Provider",
-        })) as Provider[];
-      }),
+  providers: async (locationId: string | number): Promise<Provider[]> => {
+    const r: any = await fetch(
+      `${BASE}/api/providers${qs({ locationId })}`
+    ).then(j<any>);
+    const rows = Array.isArray(r?.data) ? r.data : r;
+    return rows.map((p: any) => ({
+      id: String(p.id ?? p.provider_id ?? p.uuid ?? p.name),
+      name: p.name ?? p.display_name ?? "Provider",
+    })) as Provider[];
+  },
 
-  // NOTE: visit types now REQUIRE locationId (NexHealth)
-  visitTypes: (providerId: string | number, locationId: string | number) =>
-    fetch(
-      `${BASE}/api/providers/visit-types?providerId=${encodeURIComponent(
-        String(providerId)
-      )}&locationId=${encodeURIComponent(String(locationId))}`
-    )
-      .then(j<any>)
-      .then((r) => {
-        const rows = Array.isArray(r?.data) ? r.data : r;
-        return rows.map((vt: any) => ({
-          id: String(vt.id ?? vt.appointment_type_id),
-          name: vt.name ?? vt.title ?? "Visit",
-          duration: vt.duration,
-        })) as VisitType[];
-      }),
+  // visit types REQUIRE locationId (your backend ignores providerId, which is fine)
+  visitTypes: async (providerId: string | number, locationId: string | number): Promise<VisitType[]> => {
+    const r: any = await fetch(
+      `${BASE}/api/providers/visit-types${qs({ providerId, locationId })}`
+    ).then(j<any>);
+    const rows = Array.isArray(r?.data) ? r.data : r;
+    return rows.map((vt: any) => ({
+      id: String(vt.id ?? vt.appointment_type_id),
+      name: vt.name ?? vt.title ?? "Visit",
+      duration: vt.duration ?? vt.minutes,
+    })) as VisitType[];
+  },
 
-  // NOTE: availability now also takes locationId
-  availability: (
+  // FIXED: uses start/end (not from/to) and includes locationId
+  availability: async (
     providerId: string | number,
-    fromISO: string, // YYYY-MM-DD
-    toISO: string,   // YYYY-MM-DD
+    startISO: string, // YYYY-MM-DD (inclusive)
+    endISO: string,   // YYYY-MM-DD (exclusive)
     locationId: string | number
-  ) =>
-    fetch(
-      `${BASE}/api/availability?providerId=${encodeURIComponent(
-        String(providerId)
-      )}&locationId=${encodeURIComponent(String(locationId))}&from=${fromISO}&to=${toISO}`
-    )
-      .then(j<any>)
-      .then((r) => {
-        const rows = Array.isArray(r?.data) ? r.data : r;
-        return rows.map((s: any) => ({
-          start: s.start ?? s.slotStart ?? s.start_time,
-          end: s.end ?? s.end_time,
-        })) as Slot[];
-      }),
+  ): Promise<Slot[]> => {
+    const r: any = await fetch(
+      `${BASE}/api/availability${qs({ providerId, locationId, start: startISO, end: endISO })}`
+    ).then(j<any>);
+    const rows = Array.isArray(r?.data) ? r.data : r;
+    return rows.map((s: any) => ({
+      start: s.start ?? s.slotStart ?? s.start_time,
+      end: s.end ?? s.slotEnd ?? s.end_time,
+    })) as Slot[];
+  },
 
   createAppointment: (payload: {
     firstName: string;
