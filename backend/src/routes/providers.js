@@ -34,9 +34,18 @@ router.get('/', async (req, res) => {
 
 router.get('/visit-types', async (req, res) => {
   try {
-    const { providerId } = req.query;
+    const providerId = req.query.providerId || req.query.provider_id;
+    const locationId = req.query.locationId || req.query.location_id;
+    if (!providerId || !locationId) {
+      return res.status(400).json({ code: false, error: ['Missing providerId or locationId'] });
+    }
+
     const { data } = await nh.get('/appointment_types', {
-      params: { subdomain: SUBDOMAIN, provider_id: providerId }
+      params: {
+        subdomain: SUBDOMAIN,
+        provider_id: providerId,
+        location_id: locationId,    // <-- required by NexHealth
+      }
     });
     res.json(data);
   } catch (e) {
