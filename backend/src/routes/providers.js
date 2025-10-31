@@ -5,7 +5,6 @@ const router = Router();
 
 router.get('/__ping', (req, res) => res.json({ ok: true, source: 'providers' }));
 
-// Get all locations
 router.get('/locations', async (_req, res) => {
   try {
     const { data } = await nh.get('/locations', { params: { subdomain: SUBDOMAIN } });
@@ -18,7 +17,6 @@ router.get('/locations', async (_req, res) => {
   }
 });
 
-// Get providers (optional: by location)
 router.get('/', async (req, res) => {
   try {
     const { locationId } = req.query;
@@ -34,7 +32,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get visit types (by provider)
 router.get('/visit-types', async (req, res) => {
   try {
     const { providerId } = req.query;
