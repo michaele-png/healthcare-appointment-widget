@@ -1,4 +1,3 @@
-
 export const BASE =
   import.meta.env.VITE_BACKEND_URL ||
   "https://healthcare-appointment-widget-production.up.railway.app";
@@ -11,11 +10,34 @@ async function j<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// ---- Types ----
+export type Location = { id: string | number; name: string };
 export type Provider = { id: string | number; name: string };
 export type VisitType = { id: string | number; name: string; duration?: number };
 export type Slot = { start: string; end?: string };
 
+// ---- API =========
 export const api = {
+  // Prefer a clean /api/locations; fallback to /api/providers/locations if needed
+  locations: async (): Promise<Location[]> => {
+    try {
+      const r: any = await fetch(`${BASE}/api/locations`, {
+        headers: { Accept: "application/json" },
+      }).then(j<any>);
+      const rows = Array.isArray(r?.data) ? r.data : r;
+      return rows.map((l: any) => ({ id: String(l.id), name: l.name })) as Location[];
+    } catch {
+      // Fallback shape to NexHealth-style providers/locations payload
+      const r: any = await fetch(`${BASE}/api/providers/locations`, {
+        headers: { Accept: "application/json" },
+      }).then(j<any>);
+      if (Array.isArray(r)) return r as Location[];
+      const inst = r?.data?.[0];
+      const locs = inst?.locations ?? [];
+      return locs.map((l: any) => ({ id: String(l.id), name: l.name })) as Location[];
+    }
+  },
+
   // locationId REQUIRED by backend for all calls
   providers: async (locationId: string | number): Promise<Provider[]> => {
     const r: any = await fetch(
@@ -28,6 +50,7 @@ export const api = {
     })) as Provider[];
   },
 
+  // backend ignores providerId here (ok), but keep it for compatibility
   visitTypes: async (providerId: string | number, locationId: string | number): Promise<VisitType[]> => {
     const r: any = await fetch(
       `${BASE}/api/providers/visit-types?providerId=${encodeURIComponent(
@@ -42,7 +65,7 @@ export const api = {
     })) as VisitType[];
   },
 
-
+  // IMPORTANT: your backend expects from/to (not start/end)
   availability: async (
     providerId: string | number,
     startISO: string, // YYYY-MM-DD inclusive
