@@ -65,7 +65,7 @@ export default function AppointmentWidget() {
     const fromISO = from.toISOString().slice(0,10);
     const toISO = to.toISOString().slice(0,10);
     setLoading(true);
-    api.availability(providerId, fromISO, toISO)
+   api.availability(providerId, startISO, endISO, locationId)
       .then(setSlots)
       .catch(e => setErr(e.message))
       .finally(() => setLoading(false));
