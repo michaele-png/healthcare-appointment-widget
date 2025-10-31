@@ -1,203 +1,304 @@
+import { useEffect, useMemo, useState } from "react";
+import type { Location, Provider, VisitType, Slot } from "./api";
+import { api } from "./api";
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { api, Location, Provider, VisitType, Slot } from './api';
+// ===== Config =====
+// If VITE_LOCATION_ID is set -> single-location mode
+// If it's blank -> multi-location mode (show dropdown)
+const LOCATION_ID_ENV = (import.meta as any).env?.VITE_LOCATION_ID || ""; // blank = multi-location
+const TZ = "America/New_York";
 
-type Step = 'location' | 'provider' | 'visit' | 'slot' | 'details' | 'done';
+// ===== Helpers =====
+function fmtDate(d: Date) { return d.toISOString().slice(0, 10); }
+function addDays(d: Date, n: number) { const c = new Date(d); c.setUTCDate(c.getUTCDate() + n); return c; }
+function startOfWeek(d: Date) {
+  const copy = new Date(d);
+  const day = (copy.getUTCDay() + 6) % 7; // Mon=0
+  copy.setUTCDate(copy.getUTCDate() - day);
+  copy.setUTCHours(0, 0, 0, 0);
+  return copy;
+}
+function toLocal(iso: string) {
+  try {
+    return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone: TZ }).format(new Date(iso));
+  } catch { return iso; }
+}
+function groupByDate(items: Slot[]) {
+  const g: Record<string, Slot[]> = {};
+  for (const it of items) {
+    const k = (it.start || "").slice(0, 10);
+    if (!g[k]) g[k] = [];
+    g[k].push(it);
+  }
+  return g;
+}
 
-const fmtLocal = (iso: string) => new Date(iso).toLocaleString();
+// ===== UI atoms =====
+function Field({ label, children }: { label: string; children: any }) {
+  return (
+    <label style={{ display: "block", marginBottom: 12 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{label}</div>
+      {children}
+    </label>
+  );
+}
+function Card({ children }: { children: any }) {
+  return (
+    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, padding: 16, boxShadow: "0 2px 10px rgba(0,0,0,.04)" }}>
+      {children}
+    </div>
+  );
+}
+function Button(props: any) {
+  return (
+    <button {...props} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fafafa", cursor: "pointer" }} />
+  );
+}
 
+// ===== Main b===========
 export default function AppointmentWidget() {
-  const [step, setStep] = useState<Step>('location');
-
+  // Locations state: supports both single- and multi-location
   const [locations, setLocations] = useState<Location[]>([]);
+  const [locationId, setLocationId] = useState<string>(LOCATION_ID_ENV ? String(LOCATION_ID_ENV) : "");
+
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [visits, setVisits] = useState<VisitType[]>([]);
-  const [slots, setSlots] = useState<Slot[]>([]);
+  const [providerId, setProviderId] = useState<string>("");
 
-  const [locationId, setLocationId] = useState<string>('');
-  const [providerId, setProviderId] = useState<string>('');
-  const [visitTypeId, setVisitTypeId] = useState<string>('');
-  const [slotStart, setSlotStart] = useState<string>('');
+  const [visitTypes, setVisitTypes] = useState<VisitType[]>([]);
+  const [visitTypeId, setVisitTypeId] = useState<string>("");
 
-  const [firstName, setFirstName] = useState(''); 
-  const [lastName, setLastName] = useState('');
-  const [phone, setPhone] = useState(''); 
-  const [email, setEmail] = useState('');
+  const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date()));
+  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
 
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [slotsByDay, setSlotsByDay] = useState<Record<string, Slot[]>>({});
+  const [loadingSlots, setLoadingSlots] = useState<boolean>(false);
 
-  // Step 1: load locations
+  const [selectedSlot, setSelectedSlot] = useState<string>("");
+  const [firstName, setFirstName] = useState(""); const [lastName, setLastName] = useState("");
+  const [phone, setPhone] = useState(""); const [email, setEmail] = useState("");
+
+  const [error, setError] = useState<string>("");
+  const [status, setStatus] = useState<string>("");
+
+  // Load locations in multi-location mode
   useEffect(() => {
-    setLoading(true);
-    api.locations()
-      .then(setLocations)
-      .catch(e => setErr(e.message))
-      .finally(() => setLoading(false));
+    (async () => {
+      if (!LOCATION_ID_ENV) {
+        try {
+          const list = await api.locations();
+          setLocations(list);
+          if (list.length && !locationId) setLocationId(String(list[0].id));
+        } catch (e: any) {
+          setError(`Failed to load locations: ${e.message || String(e)}`);
+        }
+      }
+    })();
   }, []);
 
-  // Step 2: load providers when location changes
   useEffect(() => {
-    if (!locationId) return;
-    setLoading(true);
-    api.providers(locationId)
-      .then(setProviders)
-      .catch(e => setErr(e.message))
-      .finally(() => setLoading(false));
+    (async () => {
+      if (!locationId) return;
+      try {
+        setError("");
+        // A) Providers
+        const provs = await api.providers(locationId);
+        setProviders(provs);
+        const firstPid = provs[0]?.id ? String(provs[0].id) : "";
+        setProviderId(firstPid);
+
+        // B) Visit types
+        if (firstPid) {
+          const vts = await api.visitTypes(firstPid, locationId);
+          setVisitTypes(vts);
+          setVisitTypeId(vts[0]?.id ? String(vts[0].id) : "");
+        } else {
+          setVisitTypes([]); setVisitTypeId("");
+        }
+
+        // C) Availability
+        await loadAvailability(firstPid || "", locationId, weekStart);
+      } catch (e: any) {
+        setError(`Failed to initialize for location ${locationId}: ${e.message || String(e)}`);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationId]);
 
-  // Step 3: load visit types when provider changes
+  // Reload availability when week or provider changes
   useEffect(() => {
-    if (!providerId) return;
-    setLoading(true);
-    api.visitTypes(providerId)
-      .then(setVisits)
-      .catch(e => setErr(e.message))
-      .finally(() => setLoading(false));
-  }, [providerId]);
+    if (!providerId || !locationId) return;
+    loadAvailability(providerId, locationId, weekStart);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekStart, providerId]);
 
-  // Step 4: load availability when visit is chosen (current week → +14 days)
-  useEffect(() => {
-    if (!providerId || !visitTypeId) return;
-    const from = new Date();
-    const to = new Date(); to.setDate(to.getDate() + 14);
-    const fromISO = from.toISOString().slice(0,10);
-    const toISO = to.toISOString().slice(0,10);
-    setLoading(true);
-   api.availability(providerId, startISO, endISO, locationId)
-      .then(setSlots)
-      .catch(e => setErr(e.message))
-      .finally(() => setLoading(false));
-  }, [providerId, visitTypeId]);
-
-  const canNext = useMemo(() => {
-    if (step === 'location') return !!locationId;
-    if (step === 'provider') return !!providerId;
-    if (step === 'visit')    return !!visitTypeId;
-    if (step === 'slot')     return !!slotStart;
-    if (step === 'details')  return firstName && lastName && phone && email;
-    return false;
-  }, [step, locationId, providerId, visitTypeId, slotStart, firstName, lastName, phone, email]);
-
-  const onSubmit = async () => {
+  async function loadAvailability(pid: string, locId: string, weekStartDate: Date) {
+    if (!pid) { setSlotsByDay({}); return; }
     try {
-      setLoading(true); setErr(null);
-      const res = await api.createAppointment({
-        firstName, lastName, phone, email,
-        providerId, locationId, visitTypeId, slotStart,
-      });
-      if (!res.ok) throw new Error('Booking failed');
-      setConfirmId(res.appointmentId ?? 'pending');
-      setStep('done');
-    } catch (e:any) {
-      setErr(e.message);
+      setLoadingSlots(true);
+      setError("");
+      const startISO = fmtDate(weekStartDate);
+      const endISO = fmtDate(addDays(weekStartDate, 7)); // exclusive
+      const slots = await api.availability(pid, startISO, endISO, locId);
+      setSlotsByDay(groupByDate(slots));
+    } catch (e: any) {
+      setError(`Failed to load availability: ${e.message || String(e)}`);
+      setSlotsByDay({});
     } finally {
-      setLoading(false);
+      setLoadingSlots(false);
     }
-  };
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setStatus(""); setError("");
+
+    const pid = Number(providerId);
+    const loc = Number(locationId);
+    const vt = Number(visitTypeId);
+
+    if (!pid || !loc || !vt || !selectedSlot) {
+      setError("Please select location, provider, visit type, and a time slot.");
+      return;
+    }
+
+    const payload = {
+      firstName, lastName, phone, email,
+      providerId: pid, locationId: loc, visitTypeId: vt,
+      slotStart: selectedSlot,
+    };
+
+    console.log("POST /api/appointments payload", payload);
+    try {
+      await api.createAppointment(payload);
+      setStatus("Appointment requested!");
+    } catch (e: any) {
+      setError(`Booking failed: ${e.message || String(e)}`);
+    }
+  }
 
   return (
-    <div className="max-w-xl mx-auto rounded-2xl shadow p-6 space-y-4 font-sans">
-      <h2 className="text-2xl font-semibold">Book an appointment</h2>
+    <div style={{ maxWidth: 960, margin: "24px auto", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
+      <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 12 }}>Book an Appointment</h1>
 
-      {err && <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded">{err}</div>}
-      {loading && <div className="text-sm opacity-70">Loading…</div>}
+      <Card>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          <Field label="Location">
+            {LOCATION_ID_ENV ? (
+              <input
+                value={locationId}
+                readOnly
+                style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px" }}
+              />
+            ) : (
+              <select
+                value={locationId}
+                onChange={e => { setLocationId(e.target.value); setSelectedSlot(""); }}
+                style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px" }}
+              >
+                {locations.map(l => (
+                  <option key={String(l.id)} value={String(l.id)}>{l.name}</option>
+                ))}
+              </select>
+            )}
+          </Field>
 
-      {step === 'location' && (
-        <div className="space-y-2">
-          <label className="block text-sm font-medium">Location</label>
-          <select className="w-full border rounded p-2"
-            value={locationId}
-            onChange={e => setLocationId(e.target.value)}>
-            <option value="">Select a location</option>
-            {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
+          <Field label="Provider">
+            <select
+              value={providerId}
+              onChange={e => { setProviderId(e.target.value); setSelectedSlot(""); }}
+              style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px" }}
+            >
+              {providers.map(p => (
+                <option key={String(p.id)} value={String(p.id)}>{p.name}</option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Visit type">
+            <select
+              value={visitTypeId}
+              onChange={e => setVisitTypeId(e.target.value)}
+              style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px" }}
+            >
+              {visitTypes.map(vt => (
+                <option key={String(vt.id)} value={String(vt.id)}>{vt.name}</option>
+              ))}
+            </select>
+          </Field>
         </div>
-      )}
+        {error && <div style={{ marginTop: 8, color: "#b91c1c", fontSize: 13 }}>{error}</div>}
+      </Card>
 
-      {step === 'provider' && (
-        <div className="space-y-2">
-          <label className="block text-sm font-medium">Provider</label>
-          <select className="w-full border rounded p-2"
-            value={providerId}
-            onChange={e => setProviderId(e.target.value)}>
-            <option value="">Select a provider</option>
-            {providers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </div>
-      )}
+      <div style={{ height: 10 }} />
 
-      {step === 'visit' && (
-        <div className="space-y-2">
-          <label className="block text-sm font-medium">Visit type</label>
-          <select className="w-full border rounded p-2"
-            value={visitTypeId}
-            onChange={e => setVisitTypeId(e.target.value)}>
-            <option value="">Select a visit type</option>
-            {visits.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-          </select>
-        </div>
-      )}
-
-      {step === 'slot' && (
-        <div className="space-y-2">
-          <label className="block text-sm font-medium">Available times</label>
-          <div className="grid grid-cols-2 gap-2 max-h-60 overflow-auto border rounded p-2">
-            {slots.length === 0 && <div className="col-span-2 text-sm opacity-70">No slots found in the next 14 days.</div>}
-            {slots.map((s, i) => (
-              <button key={i}
-                className={`border rounded p-2 text-sm text-left ${slotStart===s.start ? 'ring-2 ring-black' : ''}`}
-                onClick={() => setSlotStart(s.start)}>
-                {fmtLocal(s.start)}
-              </button>
-            ))}
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <strong>Select a time (week view)</strong>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Button onClick={() => setWeekStart(addDays(weekStart, -7))}>Previous</Button>
+            <Button onClick={() => setWeekStart(startOfWeek(new Date()))}>Today</Button>
+            <Button onClick={() => setWeekStart(addDays(weekStart, 7))}>Next</Button>
           </div>
         </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 10 }}>
+          {weekDays.map((day, idx) => {
+            const key = fmtDate(day);
+            const slots = slotsByDay[key] || [];
+            return (
+              <div key={idx} style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 10, minHeight: 120, display: "flex", flexDirection: "column" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+                  {day.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {loadingSlots ? (
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>Loading…</div>
+                  ) : slots.length ? (
+                    slots.map((s, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setSelectedSlot(s.start)}
+                        style={{ fontSize: 12, padding: "6px 8px", border: "1px solid #d1d5db", borderRadius: 8, background: selectedSlot === s.start ? "#eef2ff" : "#fff", textAlign: "left", cursor: "pointer" }}
+                      >
+                        {toLocal(s.start)}
+                      </button>
+                    ))
+                  ) : (
+                    <div style={{ fontSize: 12, color: "#9ca3af" }}>No slots</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {selectedSlot && (
+        <>
+          <div style={{ height: 10 }} />
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <strong>Your details</strong>
+              <Button onClick={() => setSelectedSlot("")}>Close</Button>
+            </div>
+            <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
+              <Field label="First name"><input value={firstName} onChange={e => setFirstName(e.target.value)} required style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px" }} /></Field>
+              <Field label="Last name"><input value={lastName} onChange={e => setLastName(e.target.value)} required style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px" }} /></Field>
+              <Field label="Phone"><input value={phone} onChange={e => setPhone(e.target.value)} required style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px" }} /></Field>
+              <Field label="Email"><input type="email" value={email} onChange={e => setEmail(e.target.value)} required style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px" }} /></Field>
+              <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8 }}>
+                <button type="submit" disabled={!locationId || !providerId || !visitTypeId || !selectedSlot} style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fafafa", cursor: "pointer" }}>
+                  Confirm appointment at {toLocal(selectedSlot)}
+                </button>
+                {status && <span style={{ color: "#065f46", fontSize: 13 }}>{status}</span>}
+              </div>
+            </form>
+          </Card>
+        </>
       )}
 
-      {step === 'details' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <input className="border rounded p-2" placeholder="First name" value={firstName} onChange={e => setFirstName(e.target.value)} />
-          <input className="border rounded p-2" placeholder="Last name" value={lastName} onChange={e => setLastName(e.target.value)} />
-          <input className="border rounded p-2 md:col-span-2" placeholder="Phone (+1…)" value={phone} onChange={e => setPhone(e.target.value)} />
-          <input className="border rounded p-2 md:col-span-2" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
-        </div>
-      )}
-
-      {step === 'done' && (
-        <div className="bg-green-50 border border-green-200 text-green-800 p-4 rounded">
-          Appointment booked! Confirmation: <b>{confirmId}</b>
-        </div>
-      )}
-
-      <div className="flex justify-between pt-2">
-        <div className="text-sm opacity-60">Step: {step}</div>
-        <div className="space-x-2">
-          {step !== 'location' && step !== 'done' && (
-            <button className="px-3 py-2 border rounded" onClick={() => setStep(
-              step === 'provider' ? 'location' :
-              step === 'visit'    ? 'provider' :
-              step === 'slot'     ? 'visit'    :
-              'slot'
-            )}>Back</button>
-          )}
-          {step !== 'done' && (
-            <button
-              className={`px-4 py-2 rounded ${canNext ? 'bg-black text-white' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
-              disabled={!canNext}
-              onClick={() => {
-                if (step === 'location') setStep('provider');
-                else if (step === 'provider') setStep('visit');
-                else if (step === 'visit') setStep('slot');
-                else if (step === 'slot') setStep('details');
-                else if (step === 'details') onSubmit();
-              }}
-            >
-              {step === 'details' ? 'Book' : 'Next'}
-            </button>
-          )}
-        </div>
+      <div style={{ fontSize: 12, color: "#6b7280", marginTop: 8 }}>
+        API: {import.meta.env.VITE_BACKEND_URL || "(default Railway)"} | Location mode: {LOCATION_ID_ENV ? "single" : "multi"} | TZ: {TZ}
       </div>
     </div>
   );
