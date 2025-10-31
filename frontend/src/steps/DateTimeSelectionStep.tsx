@@ -14,8 +14,9 @@ export default function DateTimeSelectionStep() {
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [offsetDays, setOffsetDays] = useState(0);
+  const [offsetDays, setOffsetDays] = useState(0); // prev/next week
 
+  // 7-day window starting today + offset
   const range = useMemo(() => {
     const from = new Date(); from.setDate(from.getDate() + offsetDays);
     const to = new Date(from); to.setDate(to.getDate() + 6);
@@ -40,22 +41,36 @@ export default function DateTimeSelectionStep() {
   return (
     <div className="step">
       <h3 className="text-lg font-semibold mb-2">Pick a time</h3>
+
       <div className="flex items-center justify-between mb-2">
         <div className="text-xs text-gray-600">Times shown in your local timezone</div>
         <div className="flex gap-2">
-          <button className="btn" onClick={() => setOffsetDays(d => Math.max(0, d - 7))} disabled={offsetDays <= 0}>⟵ Prev week</button>
-          <button className="btn" onClick={() => setOffsetDays(d => d + 7)}>Next week ⟶</button>
+          <button className="btn" onClick={() => setOffsetDays((d) => Math.max(0, d - 7))} disabled={offsetDays <= 0}>
+            ⟵ Prev week
+          </button>
+          <button className="btn" onClick={() => setOffsetDays((d) => d + 7)}>
+            Next week ⟶
+          </button>
         </div>
       </div>
 
       {err && <div className="error mb-2">{err}</div>}
       {loading && <div className="text-sm text-gray-500 mb-2">Loading availability…</div>}
 
-      <WeekCalendar slots={slots} selected={selectedISO ?? undefined} onSelect={onSelect} days={7} />
+      <WeekCalendar
+        slots={slots}
+        selected={selectedISO ?? undefined}
+        onSelect={onSelect}
+        days={7}
+      />
 
       <div className="actions flex gap-2 mt-3">
         <button className="btn" onClick={goBack}>Back</button>
-        <button className="btn btn-primary" onClick={() => setCurrentStep('patient-info')} disabled={!selectedISO}>
+        <button
+          className="btn btn-primary"
+          onClick={() => setCurrentStep('patient-info')}
+          disabled={!selectedISO}
+        >
           Next
         </button>
       </div>
