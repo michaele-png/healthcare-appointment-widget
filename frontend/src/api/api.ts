@@ -13,15 +13,16 @@ export type VisitType = { id: string; name: string; duration?: number };
 export type Slot = { start: string; end?: string };
 
 export const api = {
-  locations: () =>
-    fetch(`${BASE}/api/providers/locations`)
+  // ...
+  visitTypes: (providerId: string|number, locationId: string|number) =>
+    fetch(`${BASE}/api/providers/visit-types?providerId=${encodeURIComponent(String(providerId))}&locationId=${encodeURIComponent(String(locationId))}`)
       .then(j<any>)
       .then(r => {
-        if (Array.isArray(r)) return r as Location[];
-        const locs = r?.data?.[0]?.locations ?? [];
-        return locs.map((l: any) => ({ id: String(l.id), name: l.name })) as Location[];
+        const rows = Array.isArray(r?.data) ? r.data : r;
+        return rows.map((vt: any) => ({ id: String(vt.id ?? vt.appointment_type_id), name: vt.name ?? vt.title ?? 'Visit', duration: vt.duration }));
       }),
-
+  // ...
+};
   providers: (locationId: string) =>
     fetch(`${BASE}/api/providers?locationId=${encodeURIComponent(locationId)}`)
       .then(j<any>)
