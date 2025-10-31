@@ -6,20 +6,15 @@ import WeekCalendar from '../components/WeekCalendar';
 const toYMD = (d: Date) => d.toISOString().slice(0, 10);
 
 export default function DateTimeSelectionStep() {
-  const {
-    bookingData,
-    setCurrentStep,
-    updateBookingData,
-    goBack,
-    goNext,
-  } = useWidget();
+  const { bookingData, setCurrentStep, updateBookingData, goBack } = useWidget();
 
   const providerId = String(bookingData.provider?.id ?? '');
+  const locationId = String(bookingData.locationId ?? bookingData.provider?.location_id ?? '');
+
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-
-  const [offsetDays, setOffsetDays] = useState(0); // prev/next week controls
+  const [offsetDays, setOffsetDays] = useState(0);
 
   const range = useMemo(() => {
     const from = new Date(); from.setDate(from.getDate() + offsetDays);
@@ -28,13 +23,13 @@ export default function DateTimeSelectionStep() {
   }, [offsetDays]);
 
   useEffect(() => {
-    if (!providerId || !bookingData.appointmentType?.id) return;
+    if (!providerId || !locationId) return;
     setLoading(true);
-    api.availability(providerId, range.from, range.to)
+    api.availability(providerId, range.from, range.to, locationId)
       .then(setSlots)
-      .catch(e => setErr(e.message))
+      .catch((e) => setErr(e.message))
       .finally(() => setLoading(false));
-  }, [providerId, bookingData.appointmentType?.id, range.from, range.to]);
+  }, [providerId, locationId, range.from, range.to]);
 
   const onSelect = (iso: string) => {
     updateBookingData({ selectedSlot: { start_time: iso, start: iso } });
@@ -45,7 +40,6 @@ export default function DateTimeSelectionStep() {
   return (
     <div className="step">
       <h3 className="text-lg font-semibold mb-2">Pick a time</h3>
-
       <div className="flex items-center justify-between mb-2">
         <div className="text-xs text-gray-600">Times shown in your local timezone</div>
         <div className="flex gap-2">
@@ -57,20 +51,11 @@ export default function DateTimeSelectionStep() {
       {err && <div className="error mb-2">{err}</div>}
       {loading && <div className="text-sm text-gray-500 mb-2">Loading availability…</div>}
 
-      <WeekCalendar
-        slots={slots}
-        selected={selectedISO ?? undefined}
-        onSelect={onSelect}
-        days={7}
-      />
+      <WeekCalendar slots={slots} selected={selectedISO ?? undefined} onSelect={onSelect} days={7} />
 
       <div className="actions flex gap-2 mt-3">
         <button className="btn" onClick={goBack}>Back</button>
-        <button
-          className="btn btn-primary"
-          onClick={() => setCurrentStep('patient-info')}
-          disabled={!selectedISO}
-        >
+        <button className="btn btn-primary" onClick={() => setCurrentStep('patient-info')} disabled={!selectedISO}>
           Next
         </button>
       </div>
